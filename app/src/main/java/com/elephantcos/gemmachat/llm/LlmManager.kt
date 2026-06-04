@@ -6,33 +6,34 @@ import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 
-class LlmManager private constructor(private val llm: LlmInference) {
+class LlmManager private constructor() {
 
-    companion object {
-        @Volatile private var INSTANCE: LlmManager? = null
+    private lateinit var llm: LlmInference
+    private val responseBuffer = StringBuilder()
 
-        fun getInstance(context: Context, modelPath: String): LlmManager =
-            INSTANCE ?: synchronized(this) {
-                INSTANCE ?: run {
-                    val options = LlmInference.LlmInferenceOptions.builder()
-                        .setModelPath(modelPath)
-                        .setMaxTokens(1024)
-                        .setTopK(40)
-                        .setTemperature(0.8f)
-                        .setRandomSeed(42)
-                        .build()
-                    LlmManager(LlmInference.createFromOptions(context, options))
-                        .also { INSTANCE = it }
+    @Volatile private var tokenCallback: ((String) -> Unit)? = null
+    @Volatile private var doneCallback: ((String) -> Unit)? = null
+
+    fun initialize(context: Context, modelPath: String) {
+        val options = LlmInference.LlmInferenceOptions.builder()
+            .setModelPath(modelPath)
+            .setMaxTokens(1024)
+            .setTopK(40)
+            .setTemperature(0.8f)
+            .setRandomSeed(42)
+            .setResultListener { partial, done ->
+                if (partial != null) {
+                    responseBuffer.append(partial)
+                    tokenCallback?.invoke(partial)
+                }
+                if (done) {
+                    doneCallback?.invoke(responseBuffer.toString())
+                    tokenCallback = null
+                    doneCallback = null
                 }
             }
-
-        fun get(): LlmManager? = INSTANCE
-        fun isLoaded(): Boolean = INSTANCE != null
-
-        fun release() {
-            INSTANCE?.llm?.close()
-            INSTANCE = null
-        }
+            .build()
+        llm = LlmInference.createFromOptions(context, options)
     }
 
     fun buildPrompt(history: List<Pair<String, String>>): String = buildString {
@@ -44,20 +45,43 @@ class LlmManager private constructor(private val llm: LlmInference) {
 
     suspend fun generate(prompt: String, onToken: (String) -> Unit): String =
         suspendCancellableCoroutine { cont ->
-            val response = StringBuilder()
+            responseBuffer.clear()
+            tokenCallback = onToken
+            doneCallback = { result ->
+                if (cont.isActive) cont.resume(result)
+            }
+            cont.invokeOnCancellation {
+                tokenCallback = null
+                doneCallback = null
+            }
             try {
-                llm.generateResponseAsync(prompt) { partial, done ->
-                    if (!cont.isActive) return@generateResponseAsync
-                    if (partial != null) {
-                        response.append(partial)
-                        onToken(partial)
-                    }
-                    if (done && cont.isActive) {
-                        cont.resume(response.toString())
-                    }
-                }
+                llm.generateResponseAsync(prompt)
             } catch (e: Exception) {
                 if (cont.isActive) cont.resumeWithException(e)
             }
         }
+
+    fun close() {
+        if (::llm.isInitialized) llm.close()
+    }
+
+    companion object {
+        @Volatile private var INSTANCE: LlmManager? = null
+
+        fun getInstance(context: Context, modelPath: String): LlmManager =
+            INSTANCE ?: synchronized(this) {
+                INSTANCE ?: LlmManager().also {
+                    it.initialize(context, modelPath)
+                    INSTANCE = it
+                }
+            }
+
+        fun get(): LlmManager? = INSTANCE
+        fun isLoaded(): Boolean = INSTANCE != null
+
+        fun release() {
+            INSTANCE?.close()
+            INSTANCE = null
+        }
+    }
 }
