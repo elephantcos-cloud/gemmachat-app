@@ -1,6 +1,10 @@
 package com.elephantcos.gemmachat.ui.screens
 
+import android.content.Intent
 import android.net.Uri
+import android.os.Build
+import android.os.Environment
+import android.provider.Settings
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
@@ -8,6 +12,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.FolderOpen
+import androidx.compose.material.icons.filled.Security
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -16,10 +21,13 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import com.elephantcos.gemmachat.ui.theme.*
 import com.elephantcos.gemmachat.util.PathResolver
 import java.io.File
@@ -27,18 +35,42 @@ import java.io.File
 @Composable
 fun SetupScreen(onModelSelected: () -> Unit) {
     val context = LocalContext.current
-    var selectedUri by remember { mutableStateOf<Uri?>(null) }
+    val lifecycleOwner = LocalLifecycleOwner.current
+
     var resolvedPath by remember { mutableStateOf<String?>(null) }
     var manualPath by remember { mutableStateOf("") }
     var error by remember { mutableStateOf<String?>(null) }
     var showManual by remember { mutableStateOf(false) }
 
-    val launcher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+    fun hasStoragePermission(): Boolean =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R)
+            Environment.isExternalStorageManager()
+        else true
+
+    var hasPermission by remember { mutableStateOf(hasStoragePermission()) }
+
+    // Re-check permission when app resumes (user returns from Settings)
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                hasPermission = hasStoragePermission()
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+
+    val permissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) {
+        hasPermission = hasStoragePermission()
+    }
+
+    val fileLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         uri ?: return@rememberLauncherForActivityResult
-        selectedUri = uri
         try {
             context.contentResolver.takePersistableUriPermission(
-                uri, android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION
+                uri, Intent.FLAG_GRANT_READ_URI_PERMISSION
             )
         } catch (_: Exception) {}
         val path = PathResolver.resolve(context, uri)
@@ -47,7 +79,7 @@ fun SetupScreen(onModelSelected: () -> Unit) {
             error = null
             showManual = false
         } else {
-            error = "Cannot auto-resolve path. Please enter it manually below."
+            error = "Path auto-resolve failed. Enter manually below."
             showManual = true
         }
     }
@@ -66,7 +98,6 @@ fun SetupScreen(onModelSelected: () -> Unit) {
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(20.dp)
         ) {
-            // Logo
             Box(
                 modifier = Modifier
                     .size(88.dp)
@@ -87,6 +118,44 @@ fun SetupScreen(onModelSelected: () -> Unit) {
                 lineHeight = 21.sp
             )
 
+            // Permission card (Android 11+ only)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && !hasPermission) {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(18.dp),
+                    colors = CardDefaults.cardColors(containerColor = Color(0xFF2A1A1A))
+                ) {
+                    Column(
+                        modifier = Modifier.padding(20.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(Icons.Default.Security, contentDescription = null, tint = ErrorRed, modifier = Modifier.size(20.dp))
+                            Text("Storage Permission Required", color = ErrorRed, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
+                        }
+                        Text(
+                            "To read the model file from Downloads, grant All Files Access permission.",
+                            color = TextSecondary, fontSize = 13.sp, lineHeight = 19.sp
+                        )
+                        Button(
+                            onClick = {
+                                val intent = Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION)
+                                intent.data = Uri.parse("package:${context.packageName}")
+                                permissionLauncher.launch(intent)
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(12.dp),
+                            colors = ButtonDefaults.buttonColors(containerColor = ErrorRed)
+                        ) {
+                            Text("Grant Permission", color = Color.White, fontWeight = FontWeight.SemiBold)
+                        }
+                    }
+                }
+            }
+
             // File picker card
             Card(
                 modifier = Modifier.fillMaxWidth(),
@@ -100,19 +169,14 @@ fun SetupScreen(onModelSelected: () -> Unit) {
                     Text("Model File", color = TextSecondary, fontSize = 12.sp, fontWeight = FontWeight.Medium)
 
                     if (resolvedPath != null) {
-                        Text(
-                            resolvedPath!!.substringAfterLast("/"),
-                            color = AccentTeal,
-                            fontSize = 14.sp,
-                            fontWeight = FontWeight.SemiBold
-                        )
+                        Text(resolvedPath!!.substringAfterLast("/"), color = AccentTeal, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
                         Text(resolvedPath!!, color = TextSecondary, fontSize = 11.sp)
                     } else {
-                        Text("No file selected", color = TextSecondary.copy(alpha = 0.5f), fontSize = 13.sp)
+                        Text("No file selected", color = TextSecondary.copy(0.5f), fontSize = 13.sp)
                     }
 
                     OutlinedButton(
-                        onClick = { launcher.launch(arrayOf("*/*")) },
+                        onClick = { fileLauncher.launch(arrayOf("*/*")) },
                         modifier = Modifier.fillMaxWidth(),
                         shape = RoundedCornerShape(12.dp),
                         colors = ButtonDefaults.outlinedButtonColors(contentColor = AccentPurple)
@@ -122,7 +186,6 @@ fun SetupScreen(onModelSelected: () -> Unit) {
                         Text("Browse .task file")
                     }
 
-                    // Manual path fallback
                     if (showManual) {
                         Divider(color = DividerColor)
                         Text("Enter path manually:", color = TextSecondary, fontSize = 12.sp)
@@ -143,12 +206,8 @@ fun SetupScreen(onModelSelected: () -> Unit) {
                         )
                         TextButton(onClick = {
                             val f = File(manualPath.trim())
-                            if (f.exists()) {
-                                resolvedPath = manualPath.trim()
-                                error = null
-                            } else {
-                                error = "File not found at that path."
-                            }
+                            if (f.exists()) { resolvedPath = manualPath.trim(); error = null }
+                            else error = "File not found at that path."
                         }) { Text("Use this path", color = AccentTeal) }
                     }
 
@@ -166,7 +225,7 @@ fun SetupScreen(onModelSelected: () -> Unit) {
                         onModelSelected()
                     }
                 },
-                enabled = resolvedPath != null,
+                enabled = resolvedPath != null && hasPermission,
                 modifier = Modifier.fillMaxWidth().height(52.dp),
                 shape = RoundedCornerShape(16.dp),
                 colors = ButtonDefaults.buttonColors(
