@@ -19,8 +19,6 @@ class LlmManager private constructor() {
             .setModelPath(modelPath)
             .setMaxTokens(1024)
             .setMaxTopK(40)
-            .setTemperature(0.8f)
-            .setRandomSeed(42)
             .setResultListener { result: String?, done: Boolean ->
                 if (result != null) {
                     responseBuffer.append(result)
