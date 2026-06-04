@@ -18,13 +18,13 @@ class LlmManager private constructor() {
         val options = LlmInference.LlmInferenceOptions.builder()
             .setModelPath(modelPath)
             .setMaxTokens(1024)
-            .setTopK(40)
+            .setMaxTopK(40)
             .setTemperature(0.8f)
             .setRandomSeed(42)
-            .setResultListener { partial, done ->
-                if (partial != null) {
-                    responseBuffer.append(partial)
-                    tokenCallback?.invoke(partial)
+            .setResultListener { result: String?, done: Boolean ->
+                if (result != null) {
+                    responseBuffer.append(result)
+                    tokenCallback?.invoke(result)
                 }
                 if (done) {
                     doneCallback?.invoke(responseBuffer.toString())
