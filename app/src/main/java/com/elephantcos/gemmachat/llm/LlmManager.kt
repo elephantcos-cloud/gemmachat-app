@@ -30,6 +30,7 @@ class LlmManager private constructor(private val llm: LlmInference) {
                         .setModelPath(modelPath)
                         .setMaxTokens(1024)
                         .setMaxTopK(40)
+                        .setPreferredBackend(LlmInference.Backend.CPU)
                         .build()
                     LlmManager(LlmInference.createFromOptions(context, options))
                         .also { INSTANCE = it }
