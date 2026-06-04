@@ -28,19 +28,19 @@ class ChatViewModel(
 
     val messages = repository.getMessages(conversationId)
 
-    private val _isGenerating    = MutableStateFlow(false)
+    private val _isGenerating     = MutableStateFlow(false)
     val isGenerating: StateFlow<Boolean> = _isGenerating.asStateFlow()
 
-    private val _streamingText   = MutableStateFlow("")
+    private val _streamingText    = MutableStateFlow("")
     val streamingText: StateFlow<String> = _streamingText.asStateFlow()
 
     private val _conversationTitle = MutableStateFlow("New Chat")
     val conversationTitle: StateFlow<String> = _conversationTitle.asStateFlow()
 
-    private val _error           = MutableStateFlow<String?>(null)
+    private val _error            = MutableStateFlow<String?>(null)
     val error: StateFlow<String?> = _error.asStateFlow()
 
-    private val _isModelLoading  = MutableStateFlow(false)
+    private val _isModelLoading   = MutableStateFlow(false)
     val isModelLoading: StateFlow<Boolean> = _isModelLoading.asStateFlow()
 
     init {
@@ -77,38 +77,25 @@ class ChatViewModel(
     fun sendMessage(text: String) {
         viewModelScope.launch {
             _error.value = null
-
             val llm = LlmManager.get()
             if (llm == null) {
-                _error.value = "Model not ready. Please wait for it to load."
+                _error.value = "Model not ready. Please wait."
                 return@launch
             }
-
             _isGenerating.value = true
-
-            // Save user message
             repository.addMessage(conversationId, "user", text)
-
-            // Update title on first message
             val allMessages = repository.getMessagesSync(conversationId)
             if (allMessages.size == 1) {
                 val title = text.take(32) + if (text.length > 32) "…" else ""
                 repository.updateConversationTitle(conversationId, title)
                 _conversationTitle.value = title
             }
-
-            // Build Gemma IT prompt from history
-            val history = allMessages.map { Pair(it.role, it.content) }
-            val prompt = llm.buildPrompt(history)
-
-            _streamingText.value = ""
+            val prompt = llm.buildPrompt(allMessages.map { Pair(it.role, it.content) })
             try {
-                val response = llm.generate(prompt) { token ->
-                    _streamingText.value += token
-                }
+                val response = llm.generate(prompt)
                 repository.addMessage(conversationId, "model", response)
             } catch (e: Exception) {
-                _error.value = "Generation error: ${e.message}"
+                _error.value = "Error: ${e.message}"
             } finally {
                 _streamingText.value = ""
                 _isGenerating.value = false

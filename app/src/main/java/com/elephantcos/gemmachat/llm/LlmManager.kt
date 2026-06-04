@@ -2,37 +2,10 @@ package com.elephantcos.gemmachat.llm
 
 import android.content.Context
 import com.google.mediapipe.tasks.genai.llminference.LlmInference
-import kotlinx.coroutines.suspendCancellableCoroutine
-import kotlin.coroutines.resume
-import kotlin.coroutines.resumeWithException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
-class LlmManager private constructor() {
-
-    private lateinit var llm: LlmInference
-    private val responseBuffer = StringBuilder()
-
-    @Volatile private var tokenCallback: ((String) -> Unit)? = null
-    @Volatile private var doneCallback: ((String) -> Unit)? = null
-
-    fun initialize(context: Context, modelPath: String) {
-        val options = LlmInference.LlmInferenceOptions.builder()
-            .setModelPath(modelPath)
-            .setMaxTokens(1024)
-            .setMaxTopK(40)
-            .setResultListener { result: String?, done: Boolean ->
-                if (result != null) {
-                    responseBuffer.append(result)
-                    tokenCallback?.invoke(result)
-                }
-                if (done) {
-                    doneCallback?.invoke(responseBuffer.toString())
-                    tokenCallback = null
-                    doneCallback = null
-                }
-            }
-            .build()
-        llm = LlmInference.createFromOptions(context, options)
-    }
+class LlmManager private constructor(private val llm: LlmInference) {
 
     fun buildPrompt(history: List<Pair<String, String>>): String = buildString {
         history.forEach { (role, text) ->
@@ -41,36 +14,25 @@ class LlmManager private constructor() {
         append("<start_of_turn>model\n")
     }
 
-    suspend fun generate(prompt: String, onToken: (String) -> Unit): String =
-        suspendCancellableCoroutine { cont ->
-            responseBuffer.clear()
-            tokenCallback = onToken
-            doneCallback = { result ->
-                if (cont.isActive) cont.resume(result)
-            }
-            cont.invokeOnCancellation {
-                tokenCallback = null
-                doneCallback = null
-            }
-            try {
-                llm.generateResponseAsync(prompt)
-            } catch (e: Exception) {
-                if (cont.isActive) cont.resumeWithException(e)
-            }
-        }
-
-    fun close() {
-        if (::llm.isInitialized) llm.close()
+    suspend fun generate(prompt: String): String = withContext(Dispatchers.IO) {
+        llm.generateResponse(prompt)
     }
+
+    fun close() = llm.close()
 
     companion object {
         @Volatile private var INSTANCE: LlmManager? = null
 
         fun getInstance(context: Context, modelPath: String): LlmManager =
             INSTANCE ?: synchronized(this) {
-                INSTANCE ?: LlmManager().also {
-                    it.initialize(context, modelPath)
-                    INSTANCE = it
+                INSTANCE ?: run {
+                    val options = LlmInference.LlmInferenceOptions.builder()
+                        .setModelPath(modelPath)
+                        .setMaxTokens(1024)
+                        .setMaxTopK(40)
+                        .build()
+                    LlmManager(LlmInference.createFromOptions(context, options))
+                        .also { INSTANCE = it }
                 }
             }
 
